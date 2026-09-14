@@ -1,0 +1,10 @@
+# t1_basico: el ejemplo exacto del enunciado.
+# Esperado con cualquier politica (memoria fisica por defecto, 64 marcos):
+#   read 0    -> 42
+#   read 4096 -> 99
+#   4 accesos, 2 fallos de pagina, hit rate 50.00%, 0 reemplazos.
+alloc 8192
+write 0 42
+write 4096 99
+read 0
+read 4096

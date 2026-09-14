@@ -1,0 +1,50 @@
+# t2_thrash: working set de 8 paginas recorrido en ciclo.
+# Con --phys=16384 (4 marcos) el working set no cabe -> thrashing.
+# Las escrituras iniciales sirven para comprobar el swap: las paginas se
+# expulsan sucias y al final se releen; deben devolver los valores originales.
+alloc 32768
+
+# Sembrar las 8 paginas con valores reconocibles.
+write 0 10
+write 4096 11
+write 8192 12
+write 12288 13
+write 16384 14
+write 20480 15
+write 24576 16
+write 28672 17
+
+# Tres vueltas completas al working set.
+read 0
+read 4096
+read 8192
+read 12288
+read 16384
+read 20480
+read 24576
+read 28672
+
+read 0
+read 4096
+read 8192
+read 12288
+read 16384
+read 20480
+read 24576
+read 28672
+
+read 0
+read 4096
+read 8192
+read 12288
+read 16384
+read 20480
+read 24576
+read 28672
+
+# Verificacion del swap: deben salir 10 y 17 pese a los reemplazos.
+read 0
+read 28672
+
+# Liberacion: los marcos vuelven a la lista de libres.
+free 0

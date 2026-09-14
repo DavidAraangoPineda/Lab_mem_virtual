@@ -1,0 +1,18 @@
+# t4_belady: secuencia clasica 1,2,3,4,1,2,5,1,2,3,4,5 (OSTEP cap. 22).
+# Demuestra la anomalia de Belady en FIFO: con MAS memoria, MAS fallos.
+#   ./vmsim tests/t4_belady.trace --policy=fifo --phys=12288  (3 marcos) ->  9 fallos
+#   ./vmsim tests/t4_belady.trace --policy=fifo --phys=16384  (4 marcos) -> 10 fallos
+# LRU no puede empeorar al agregar marcos (es una politica de pila).
+alloc 24576
+read 4096
+read 8192
+read 12288
+read 16384
+read 4096
+read 8192
+read 20480
+read 4096
+read 8192
+read 12288
+read 16384
+read 20480

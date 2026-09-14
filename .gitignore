@@ -1,0 +1,9 @@
+# Artefactos de compilacion
+*.o
+vmsim
+vmsim.exe
+gen_trace
+gen_trace.exe
+
+# Trazas generadas
+tests/stress.trace

@@ -1,0 +1,50 @@
+# t3_locality: 3 paginas calientes (0, 1, 2) mas un barrido de paginas frias.
+# Con --phys=16384 (4 marcos) el conjunto caliente cabe y sobra un marco para
+# la fria de turno. LRU deberia conservar las calientes; FIFO las expulsa por
+# antiguedad aunque se esten usando, y falla mucho mas.
+alloc 32768
+
+write 0 1
+write 4096 2
+write 8192 3
+
+read 0
+read 4096
+read 8192
+read 12288
+read 0
+read 4096
+read 8192
+read 16384
+read 0
+read 4096
+read 8192
+read 20480
+read 0
+read 4096
+read 8192
+read 24576
+read 0
+read 4096
+read 8192
+read 28672
+read 0
+read 4096
+read 8192
+read 12288
+read 0
+read 4096
+read 8192
+read 16384
+read 0
+read 4096
+read 8192
+read 20480
+read 0
+read 4096
+read 8192
+read 24576
+read 0
+read 4096
+read 8192
+read 28672
