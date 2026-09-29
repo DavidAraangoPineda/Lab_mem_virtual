@@ -48,7 +48,7 @@ int main(int argc, char **argv)
             page = (unsigned)rand() % npages;
         }
 
-        /* 1 de cada 4 accesos escribe: asi se ejercitan el bit dirty y el swap. */
+        /* 1 de cada 4 accesos escribe: asi se ejercita el bit dirty. */
         if (i % 4 == 0)
             printf("write %u %u\n", page * PAGE_SIZE + (unsigned)rand() % PAGE_SIZE,
                    i % 256);

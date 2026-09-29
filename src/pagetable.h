@@ -16,9 +16,8 @@ typedef struct {
     uint32_t frame;      /* marco fisico, valido solo si valid == 1           */
     uint8_t  valid;      /* la pagina esta residente en memoria fisica        */
     uint8_t  accessed;   /* referenciada desde la ultima limpieza (usa CLOCK) */
-    uint8_t  dirty;      /* escrita: hay que respaldarla al expulsarla        */
+    uint8_t  dirty;      /* escrita desde que se cargo                        */
     uint8_t  allocated;  /* reservada por alloc (aunque no este residente)    */
-    uint8_t *disk;       /* bloque de "disco": respaldo tras ser expulsada    */
 } PTE;
 
 typedef struct PageTable PageTable;

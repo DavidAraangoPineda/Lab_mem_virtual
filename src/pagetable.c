@@ -26,17 +26,11 @@ PageTable *pt_create(const Config *cfg)
 
 void pt_destroy(PageTable *pt)
 {
-    int i, j;
+    int i;
     if (!pt) return;
 
-    for (i = 0; i < pt->l1_entries; i++) {
-        if (!pt->l1[i]) continue;
-        /* Cada PTE puede tener un bloque de swap colgando: se libera aqui
-         * para no dejar fugas cuando el programa termina con paginas fuera. */
-        for (j = 0; j < pt->l2_entries; j++)
-            free(pt->l1[i][j].disk);
-        free(pt->l1[i]);
-    }
+    for (i = 0; i < pt->l1_entries; i++)
+        free(pt->l1[i]);             /* free(NULL) no hace nada */
     free(pt->l1);
     free(pt);
 }

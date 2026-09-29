@@ -36,10 +36,9 @@ typedef struct {
     uint32_t frame;      /* marco físico, válido solo si valid == 1        */
     uint8_t  valid;      /* residente en memoria física                    */
     uint8_t  accessed;   /* referenciada (bit de referencia, lo usa CLOCK) */
-    uint8_t  dirty;      /* escrita: hay que respaldarla al expulsarla     */
+    uint8_t  dirty;      /* escrita desde que se cargó                     */
     uint8_t  allocated;  /* reservada por alloc, aunque no esté residente  */
-    uint8_t *disk;       /* bloque de respaldo tras ser expulsada (swap)   */
-} PTE;                   /* sizeof(PTE) = 16 bytes */
+} PTE;                   /* sizeof(PTE) = 8 bytes */
 ```
 
 El nivel 1 es un arreglo de 1024 punteros creado al arrancar; **cada tabla de
@@ -48,16 +47,19 @@ nivel 2 se crea con `calloc` la primera vez que se toca su región de 4 MB**
 
 | Esquema                               | Memoria de tablas |
 |---------------------------------------|-------------------|
-| Tabla lineal: 2²⁰ PTE × 16 B          | **16 MiB** por proceso |
-| Dos niveles, 1 región de 4 MB tocada  | 8 KiB (L1) + 16 KiB (L2) = **24 KiB** |
+| Tabla lineal: 2²⁰ PTE × 8 B           | **8 MiB** por proceso |
+| Dos niveles, 1 región de 4 MB tocada  | 8 KiB (L1) + 8 KiB (L2) = **16 KiB** |
 
-Es decir, ~680× menos memoria para los programas de prueba, que solo usan las
+Es decir, 512× menos memoria para los programas de prueba, que solo usan las
 primeras páginas del espacio virtual. El simulador imprime cuántas tablas de
 nivel 2 están vivas al final de cada corrida.
 
-Nótese que `disk` (el respaldo de swap) **vive dentro del PTE**, igual que un
-número de bloque de disco en un SO real: no hace falta una estructura de swap
-aparte y `pt_destroy()` lo libera junto con la tabla.
+**Sin swap.** El simulador no conserva el contenido de las páginas expulsadas:
+toda página que entra a memoria empieza en ceros. Lo que se estudia es la
+política de reemplazo, y las métricas (fallos, reemplazos, hit rate) no
+dependen de guardar el contenido. El bit `dirty` se conserva porque el
+enunciado lo exige y porque permite contar las **páginas sucias expulsadas**:
+las que un SO real tendría que escribir a disco.
 
 ### 1.3 Memoria física (`src/frames.c`)
 
@@ -83,10 +85,15 @@ struct Replacer {
 ```
 
 En C una interfaz es una *vtable*: un struct de punteros a función más un estado
-opaco. `vmm_create(frames, cfg, replacer)` recibe la política ya construida
+opaco. `vmm_create(cfg, replacer)` recibe la política ya construida
 (inyección por constructor) y la invoca como `rep->evict(rep->state)` sin saber
 cuál es. `src/vmm.c` no incluye `fifo.h`, `lru.h` ni `clock.h`; el único archivo
 que conoce los tres constructores es la factory `replacer_create()`.
+
+La política es **la única dependencia inyectada**, porque es la única pieza con
+varias implementaciones. La tabla de páginas y la memoria física tienen una sola,
+así que el VMM las construye por dentro a partir del `Config`: inyectarlas no
+aportaría nada.
 
 Por eso las tres políticas se comparan **sobre exactamente el mismo motor de
 traducción y de fallos**: cualquier diferencia en las tablas de abajo es
@@ -116,11 +123,10 @@ perezoso ni entradas obsoletas cuando un marco se libera y se vuelve a usar.
 `handle_page_fault()`:
 
 1. `frames_alloc()`; si hay marco libre, se usa.
-2. Si no hay: `rep->evict()` elige la víctima. Si está **sucia**, su contenido se
-   copia al bloque `disk` de su PTE (*write-back*) y se cuenta un reemplazo. Se
-   invalida su PTE.
-3. La página entrante se restaura desde su `disk` si ya existía, o se pone a
-   ceros la primera vez.
+2. Si no hay: `rep->evict()` elige la víctima, se invalida su PTE y se cuenta
+   un reemplazo. Si estaba **sucia**, se cuenta además como página sucia
+   expulsada (en un SO real, una escritura a disco).
+3. La página entrante se pone a ceros.
 4. `rep->on_map()` registra el marco en la política.
 
 ---
@@ -173,7 +179,7 @@ mantiene **una sola** tabla de nivel 2 viva.
 8 páginas escritas y luego recorridas en ciclo tres veces, con `--phys=16384`
 (4 marcos):
 
-| Política | Accesos | Fallos | Hit rate | Reemplazos | Write-backs |
+| Política | Accesos | Fallos | Hit rate | Reemplazos | Sucias expulsadas |
 |---|---|---|---|---|---|
 | FIFO  | 34 | 33 | 2.94 % | 29 | 8 |
 | LRU   | 34 | 33 | 2.94 % | 29 | 8 |
@@ -186,10 +192,11 @@ y la conclusión importante es que **ninguna política lo arregla**: el problema
 que el working set no cabe, y la solución es más memoria (o menos concurrencia),
 no un algoritmo más listo.
 
-Esta prueba también valida el swap: tras 29 reemplazos, `read 0` sigue
-devolviendo 10 y `read 28672` devuelve 17, los valores escritos al principio.
-Hay 8 write-backs, uno por página sucia. El `free` final devuelve los marcos a
-la lista de libres (`Marcos ocupados al final: 0 / 4`).
+Las 8 páginas sucias expulsadas son las 8 escritas al principio: cada una sale
+sucia la primera vez que la expulsan. Como no hay swap, su contenido se pierde:
+los `read 0` y `read 28672` del final devuelven 0, no los 10 y 17 escritos. En un
+SO real esas 8 expulsiones serían 8 escrituras a disco. El `free` final devuelve
+los marcos a la lista de libres (`Marcos ocupados al final: 0 / 4`).
 
 ### 4.3 Prueba 3 — `tests/t3_locality.trace` (3 páginas calientes + barrido frío)
 
@@ -197,7 +204,7 @@ Las páginas 0, 1 y 2 se acceden constantemente; entre medias se toca una págin
 fría distinta cada vez. Con 4 marcos el conjunto caliente cabe y sobra un marco
 para la fría de turno:
 
-| Política | Accesos | Fallos | Hit rate | Reemplazos | Write-backs |
+| Política | Accesos | Fallos | Hit rate | Reemplazos | Sucias expulsadas |
 |---|---|---|---|---|---|
 | FIFO  | 43 | 25 | 41.86 % | 21 | 3 |
 | **LRU**   | 43 | **13** | **69.77 %** | **9** | **0** |
@@ -206,9 +213,10 @@ para la fría de turno:
 **LRU reduce los fallos casi a la mitad** (25 → 13) y los reemplazos de 21 a 9.
 La razón: LRU nunca expulsa las páginas calientes porque son siempre las más
 recientes, así que solo falla al traer cada página fría. FIFO las expulsa por
-antigüedad aunque se estén usando en ese mismo instante, y además tiene que
-escribirlas a disco (3 write-backs frente a **0** de LRU: las páginas sucias
-calientes nunca salen de memoria).
+antigüedad aunque se estén usando en ese mismo instante, y además las expulsa
+sucias (3 frente a **0** de LRU: las páginas sucias calientes nunca salen de
+memoria). En un SO real, cada una de esas 3 sería una escritura a disco que LRU
+se ahorra.
 
 ### 4.4 Hit rate frente a número de marcos (`tests/t3_locality.trace`)
 
@@ -317,15 +325,16 @@ marcos, ÓPTIMO necesita 7 fallos frente a los 9 de FIFO y los 10 de LRU.
 
 ## 6. Conclusiones
 
-1. La traducción de dos niveles funciona y **paga por sí sola**: 24 KiB de tablas
-   frente a los 16 MiB de una tabla lineal, porque los niveles 2 se crean solo
+1. La traducción de dos niveles funciona y **paga por sí sola**: 16 KiB de tablas
+   frente a los 8 MiB de una tabla lineal, porque los niveles 2 se crean solo
    para las regiones que el programa toca.
 2. **El hit rate lo determina primero la relación working set / memoria, y solo
    después la política.** Con 2 o con 8 marcos las tres políticas empatan; la
    política decide únicamente en la zona intermedia.
 3. **LRU le gana claramente a FIFO cuando hay localidad** (69.77 % contra
-   41.86 %; 33 % menos fallos en el stress test) y además genera menos tráfico a
-   disco, porque no expulsa páginas sucias que se están usando.
+   41.86 %; 33 % menos fallos en el stress test) y además expulsa menos páginas
+   sucias (en un SO real, menos escrituras a disco), porque no saca las que se
+   están usando.
 4. **Ninguna política arregla el thrashing.** Con un recorrido cíclico más grande
    que la memoria, las tres bajan al 2.94 %.
 5. **FIFO y CLOCK sufren la anomalía de Belady** (más memoria → más fallos); LRU

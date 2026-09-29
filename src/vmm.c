@@ -1,4 +1,5 @@
 #include "vmm.h"
+#include "frames.h"
 #include "pagetable.h"
 
 #include <stdio.h>
@@ -17,8 +18,7 @@ typedef struct {
     unsigned long accesses;     /* read + write validos              */
     unsigned long faults;       /* fallos de pagina                  */
     unsigned long replacements; /* fallos que ademas expulsaron algo */
-    unsigned long writebacks;   /* paginas sucias respaldadas a disco */
-    unsigned long swapins;      /* paginas restauradas desde disco   */
+    unsigned long dirty_evicts; /* victimas con dirty == 1           */
     unsigned long allocs;
     unsigned long frees;
     unsigned long errors;       /* accesos invalidos                 */
@@ -26,7 +26,7 @@ typedef struct {
 
 struct VMM {
     Config     cfg;
-    Frames    *fr;    /* inyectado */
+    Frames    *fr;    /* propio    */
     Replacer  *rep;   /* inyectado */
     PageTable *pt;    /* propio    */
 
@@ -41,25 +41,29 @@ struct VMM {
 
 /* ---------------------------------------------------------------- ciclo de vida */
 
-VMM *vmm_create(Frames *fr, const Config *cfg, Replacer *rep)
+VMM *vmm_create(const Config *cfg, Replacer *rep)
 {
     VMM *vm = calloc(1, sizeof *vm);
-    if (!vm) return NULL;
+    if (!vm) {
+        if (rep) { rep->destroy(rep->state); free(rep); }
+        return NULL;
+    }
 
     /* Toma posesion de inmediato: si algo falla (por ejemplo rep == NULL porque
      * la politica pedida no existe), vmm_destroy libera todo y main solo tiene
      * que comprobar un NULL. */
     vm->cfg = *cfg;
-    vm->fr  = fr;
     vm->rep = rep;
-    if (!fr || !rep) { vmm_destroy(vm); return NULL; }
+    if (!rep) { vmm_destroy(vm); return NULL; }
 
-    vm->pt  = pt_create(cfg);
+    /* Lo que tiene una sola implementacion se construye aqui mismo. */
+    vm->fr = frames_create(cfg->num_frames, cfg->page_size);
+    vm->pt = pt_create(cfg);
 
     vm->cap_regions = 8;
     vm->regions     = calloc((size_t)vm->cap_regions, sizeof *vm->regions);
 
-    if (!vm->pt || !vm->regions) { vmm_destroy(vm); return NULL; }
+    if (!vm->fr || !vm->pt || !vm->regions) { vmm_destroy(vm); return NULL; }
 
     vm->t0 = clock();
     return vm;
@@ -68,7 +72,7 @@ VMM *vmm_create(Frames *fr, const Config *cfg, Replacer *rep)
 void vmm_destroy(VMM *vm)
 {
     if (!vm) return;
-    pt_destroy(vm->pt);              /* libera tablas de nivel 2 y bloques de swap */
+    pt_destroy(vm->pt);              /* libera las tablas de nivel 1 y 2 */
     frames_destroy(vm->fr);
     if (vm->rep) vm->rep->destroy(vm->rep->state);
     free(vm->rep);
@@ -76,27 +80,15 @@ void vmm_destroy(VMM *vm)
     free(vm);
 }
 
-/* --------------------------------------------------------------------- swap */
-
-/* Respalda el contenido del marco en el "disco" del PTE (se reserva la primera
- * vez que esa pagina se expulsa sucia y se reutiliza despues). */
-static void swap_out(VMM *vm, PTE *e, int frame)
-{
-    if (!e->disk) {
-        e->disk = malloc(vm->cfg.page_size);
-        if (!e->disk) return;        /* sin respaldo: la pagina volvera en ceros */
-    }
-    memcpy(e->disk, frames_ptr(vm->fr, frame), vm->cfg.page_size);
-    vm->st.writebacks++;
-}
-
 /* ------------------------------------------------------- fallos de pagina */
 
 /* Consigue un marco para vpn: uno libre o, si no hay, la victima que elija la
- * politica inyectada. Devuelve 0 en exito. */
+ * politica inyectada. Devuelve 0 en exito.
+ *
+ * Sin swap: el contenido de la pagina expulsada se descarta, y toda pagina
+ * que se carga (por primera vez o de nuevo) empieza en ceros. */
 static int handle_page_fault(VMM *vm, uint32_t vpn, PTE *e)
 {
-    uint8_t *page;
     int frame = frames_alloc(vm->fr, vpn);
 
     if (frame < 0) {
@@ -115,10 +107,12 @@ static int handle_page_fault(VMM *vm, uint32_t vpn, PTE *e)
         if (vm->cfg.verbose)
             printf("    [reemplazo] victima VPN %u (marco %d)%s\n",
                    victim_vpn, frame,
-                   (victim && victim->dirty) ? " sucia -> respaldada" : "");
+                   (victim && victim->dirty) ? " sucia" : "");
 
         if (victim) {
-            if (victim->dirty) swap_out(vm, victim, frame);
+            /* Un SO real tendria que escribir a disco esta pagina; aqui solo
+             * se cuenta, para medir cuanto trafico generaria cada politica. */
+            if (victim->dirty) vm->st.dirty_evicts++;
             victim->valid    = 0;
             victim->accessed = 0;
             victim->dirty    = 0;
@@ -127,14 +121,7 @@ static int handle_page_fault(VMM *vm, uint32_t vpn, PTE *e)
         frames_reassign(vm->fr, frame, vpn);
     }
 
-    /* Cargar la pagina: desde el respaldo si existe, en ceros la primera vez. */
-    page = frames_ptr(vm->fr, frame);
-    if (e->disk) {
-        memcpy(page, e->disk, vm->cfg.page_size);
-        vm->st.swapins++;
-    } else {
-        memset(page, 0, vm->cfg.page_size);
-    }
+    memset(frames_ptr(vm->fr, frame), 0, vm->cfg.page_size);
 
     e->frame    = (uint32_t)frame;
     e->valid    = 1;
@@ -269,7 +256,6 @@ int vmm_free(VMM *vm, uint32_t va)
                 vm->rep->on_unmap(vm->rep->state, (int)e->frame);
                 frames_free(vm->fr, (int)e->frame);
             }
-            free(e->disk);
             memset(e, 0, sizeof *e);
         }
         rg->live = 0;
@@ -312,7 +298,7 @@ void vmm_print_stats(const VMM *vm)
         printf("%s,%s,%lu,%lu,%.2f,%lu,%lu\n",
                vm->rep->name, vm->cfg.input_file ? vm->cfg.input_file : "-",
                n, vm->st.faults, hit_rate, vm->st.replacements,
-               vm->st.writebacks);
+               vm->st.dirty_evicts);
         return;
     }
 
@@ -327,8 +313,7 @@ void vmm_print_stats(const VMM *vm)
     printf("Total fallos de pagina   : %lu\n", vm->st.faults);
     printf("Hit rate                 : %.2f%%\n", hit_rate);
     printf("Total reemplazos         : %lu\n", vm->st.replacements);
-    printf("Escrituras a disco       : %lu\n", vm->st.writebacks);
-    printf("Cargas desde disco       : %lu\n", vm->st.swapins);
+    printf("Paginas sucias expulsadas: %lu\n", vm->st.dirty_evicts);
     printf("Allocs / frees           : %lu / %lu\n", vm->st.allocs, vm->st.frees);
     printf("Accesos invalidos        : %lu\n", vm->st.errors);
     printf("Marcos ocupados al final : %d / %d\n",

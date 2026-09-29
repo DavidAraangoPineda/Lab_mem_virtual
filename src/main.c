@@ -1,7 +1,7 @@
 /*
  * main.c - Composition root.
  *
- * Lo unico que hace es construir las dependencias, inyectarlas en el VMM,
+ * Lo unico que hace es construir la politica, inyectarla en el VMM,
  * ejecutar la traza y destruir. Toda la logica vive en las capas de abajo, y
  * cambiar de politica de reemplazo no toca ni una linea de este archivo: la
  * eleccion viaja como texto desde la CLI hasta replacer_create().
@@ -19,9 +19,8 @@ int main(int argc, char **argv)
 
     if (!cli_parse_args(argc, argv, &cfg)) { cli_usage(argv[0]); return 1; }
 
-    vm = vmm_create(frames_create(cfg.num_frames, cfg.page_size),  /* fisica  */
-                    &cfg,
-                    replacer_create(cfg.policy, cfg.num_frames));  /* politica */
+    /* Unica dependencia inyectada: la politica, porque es lo unico que varia. */
+    vm = vmm_create(&cfg, replacer_create(cfg.policy, cfg.num_frames));
     if (!vm) {
         fprintf(stderr, "error: politica '%s' invalida o memoria insuficiente\n",
                 cfg.policy);

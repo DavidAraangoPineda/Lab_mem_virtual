@@ -1,7 +1,8 @@
 # t2_thrash: working set de 8 paginas recorrido en ciclo.
 # Con --phys=16384 (4 marcos) el working set no cabe -> thrashing.
-# Las escrituras iniciales sirven para comprobar el swap: las paginas se
-# expulsan sucias y al final se releen; deben devolver los valores originales.
+# Las escrituras iniciales hacen que las victimas salgan sucias (dirty = 1).
+# Como no hay swap, el contenido de una pagina expulsada se pierde: al
+# recargarla empieza en ceros.
 alloc 32768
 
 # Sembrar las 8 paginas con valores reconocibles.
@@ -42,7 +43,8 @@ read 20480
 read 24576
 read 28672
 
-# Verificacion del swap: deben salir 10 y 17 pese a los reemplazos.
+# Sin swap: ambas fueron expulsadas desde que se escribieron (10 y 17),
+# asi que se perdio su contenido y se leen en 0.
 read 0
 read 28672
 

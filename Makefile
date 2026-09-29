@@ -31,7 +31,7 @@ run: $(TARGET)
 
 # Tabla comparativa de las tres politicas con 4 marcos (16 KB).
 compare: $(TARGET)
-	@echo "politica,traza,accesos,fallos,hit_rate,reemplazos,writebacks"
+	@echo "politica,traza,accesos,fallos,hit_rate,reemplazos,sucias_expulsadas"
 	@for t in $(TRACES); do \
 	  for p in $(POLICIES); do \
 	    ./$(TARGET) $$t --policy=$$p --phys=16384 --csv; \

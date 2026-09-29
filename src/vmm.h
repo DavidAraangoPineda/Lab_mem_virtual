@@ -1,25 +1,28 @@
 /*
  * vmm.h - Gestor de memoria virtual: la capa que orquesta todo.
  *
- * Es el unico modulo que combina memoria fisica (Frames), tabla de paginas
- * (PageTable) y politica de reemplazo (Replacer). Recibe las tres dependencias
- * ya construidas en vmm_create(): inyeccion por constructor. No incluye
- * fifo.h/lru.h/clock.h, solo la interfaz replacer.h, de modo que agregar o
- * cambiar una politica no toca este archivo.
+ * Combina memoria fisica (Frames), tabla de paginas (PageTable) y politica de
+ * reemplazo (Replacer). Regla: se inyecta solo lo que puede cambiar.
+ *   - Frames y PageTable tienen una sola implementacion: el VMM las crea por
+ *     dentro a partir del Config.
+ *   - Replacer tiene varias (FIFO, LRU, CLOCK): se recibe ya construido en
+ *     vmm_create(). Es la unica dependencia inyectada (por constructor).
+ * No incluye fifo.h/lru.h/clock.h, solo la interfaz replacer.h, de modo que
+ * agregar o cambiar una politica no toca este archivo.
  *
- * Toma posesion de lo que se le inyecta: vmm_destroy() libera Frames y Replacer.
+ * Toma posesion del Replacer: vmm_destroy() lo libera (y vmm_create tambien,
+ * si falla), asi que quien llama solo tiene que comprobar un NULL.
  */
 #ifndef VMM_H
 #define VMM_H
 
 #include <stdint.h>
 #include "config.h"
-#include "frames.h"
 #include "replacer.h"
 
 typedef struct VMM VMM;
 
-VMM *vmm_create(Frames *fr, const Config *cfg, Replacer *rep);
+VMM *vmm_create(const Config *cfg, Replacer *rep);
 void vmm_destroy(VMM *vm);
 
 /* Todas devuelven 0 en exito y -1 en error (imprimiendo el motivo). */
